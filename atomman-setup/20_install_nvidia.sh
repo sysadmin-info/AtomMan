@@ -22,3 +22,4 @@ echo "Driver installed."
 echo "Now REBOOT."
 echo "After reboot, if 'nvidia-smi' works, continue with 50_app_setup.sh."
 echo "If you get 'Key was rejected by service', run 30_secureboot_enroll_key.sh after reboot."
+sudo reboot

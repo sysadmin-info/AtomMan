@@ -136,8 +136,9 @@ Install NVIDIA driver (Ubuntu repo) and prerequisites.
 
 ```bash
 sudo ./20_install_nvidia.sh
-sudo reboot
 ```
+
+The script will reboot the operating system automatically.
 
 After reboot:
 
@@ -156,8 +157,9 @@ Creates a Machine Owner Key (MOK) and imports it into firmware (MOK Manager).
 
 ```bash
 sudo ./30_secureboot_enroll_key.sh
-sudo reboot
 ```
+
+The script will reboot the operating system automatically.
 
 During reboot you must enroll the key in the blue MOK Manager screen:
 Enroll MOK → Continue → Yes → enter password → reboot.
@@ -167,8 +169,9 @@ This is the “recovery” script you typically re-run after `apt upgrade` (new 
 
 ```bash
 sudo ./40_sign_or_reinstall_dkms.sh
-sudo reboot
 ```
+
+The script will reboot the operating system automatically.
 
 After reboot:
 

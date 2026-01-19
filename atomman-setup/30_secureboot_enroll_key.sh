@@ -24,4 +24,5 @@ echo "==> REBOOT now."
 echo "    In the blue MOK Manager menu choose:"
 echo "    Enroll MOK → Continue → Yes → enter password → Reboot."
 echo "After reboot, run 40_sign_or_reinstall_dkms.sh."
+sudo reboot
 
