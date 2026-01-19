@@ -1,0 +1,29 @@
+[Unit]
+Description=AtomMan Screen Daemon
+After=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+Group=dialout
+WorkingDirectory=__HOME__/atomman
+EnvironmentFile=-/etc/atomman.env
+Environment=ATOMMAN_NVIDIA_SMI=/usr/bin/nvidia-smi
+
+# Serial reliability tweaks for the Synwit USB Virtual COM device:
+# - Some controllers misbehave with DTR asserted.
+# - After cold boot the /dev/serial/by-id/*Synwit* node may appear a moment later.
+Environment=ATOMMAN_DSRDTR=false
+Environment=ATOMMAN_RTSCTS=false
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do ls -1 /dev/serial/by-id/*Synwit* >/dev/null 2>&1 && exit 0; sleep 1; done; echo "[atomman] Synwit serial device not found under /dev/serial/by-id" >&2; exit 1'
+
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStart=__HOME__/atomman/venv/bin/python __HOME__/atomman/src/screen.py --start-delay 8 --fan-prefer nvidia --fan-max-rpm 2200
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=45
+StandardOutput=append:/var/log/atomman.log
+StandardError=append:/var/log/atomman.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,12 @@
+# Environment / secrets
+.env
+*.env
+/etc/atomman.env
+
+# Python
+__pycache__/
+venv/
+.venv/
+
+# Logs
+*.log

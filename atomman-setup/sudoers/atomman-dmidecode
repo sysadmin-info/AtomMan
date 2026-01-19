@@ -1,0 +1,1 @@
+__USER__ ALL=(root) NOPASSWD: /usr/sbin/dmidecode -t memory, /usr/sbin/dmidecode -t bios, /usr/sbin/dmidecode -t system

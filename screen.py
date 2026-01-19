@@ -11,15 +11,16 @@
 #
 # Weather:N is mapped from OpenWeather condition id/icon.
 
-import os, sys, time, subprocess, re, glob, argparse, json, socket, urllib.parse, urllib.request
+import os, sys, time, subprocess, re, glob, argparse, json, socket, urllib.parse, urllib.request, datetime
 import serial
 
-# ===================== User Weather Settings (HARD-CODED) =====================
-# Leave OW_API_KEY empty to behave as "no internet": blanks + one-time console note.
-OW_API_KEY   = ""               # e.g. "abcdef123456..."
-OW_LOCATION  = "denver,us"      # city | "zip,country" (e.g. "80014,us") | "lat,lon" (e.g. "39.7392,-104.9903")
-OW_UNITS     = "metric"         # "metric" (°C) or "imperial" (°F)
-OW_LANG      = "en"             # language for Desc
+# ===================== User Weather Settings (FREE endpoints) =====================
+# Set the API key through env: ATOMMAN_OWM_API="..." (preferred) or provide below:
+OW_API_KEY   = os.getenv("ATOMMAN_OWM_API", "").strip()  # eg. "abcdef123456..."
+# Location: "lat,lon" (np. "51.7687,19.4570") or "City,CC" (eg. "Washington,PL") or "ZIP,CC"
+OW_LOCATION  = os.getenv("ATOMMAN_OWM_LOCATION", "51.7687,19.4570").strip()
+OW_UNITS     = os.getenv("ATOMMAN_OWM_UNITS", "metric").strip()   # "metric" (°C) or "imperial" (°F)
+OW_LANG      = os.getenv("ATOMMAN_OWM_LANG", "pl").strip()        # description language
 # Cache refresh cadence (seconds). Env override: ATOMMAN_WEATHER_REFRESH
 WEATHER_REFRESH_SECONDS = int(os.getenv("ATOMMAN_WEATHER_REFRESH", "600"))
 # ==============================================================================
@@ -389,13 +390,8 @@ def _fmt_rate(rate_kbs: float) -> str:
     gbps = mbps / 1024.0
     return f"{gbps:.1f} G/s"
 
-# ===================== OpenWeather integration (cached) =====================
-# Weather cache: refresh at most every WEATHER_REFRESH_SECONDS
-_weather_cache = {
-    "ts": 0.0,          # last successful fetch time
-    "data": None,       # dict or None
-    "warned_no_key": False,
-}
+# ===================== OpenWeather integration (FREE endpoints + cache) =====================
+_weather_cache = {"ts": 0.0, "data": None, "warned_no_key": False}
 
 def _internet_ok(host="8.8.8.8", port=53, timeout=1.5) -> bool:
     try:
@@ -411,7 +407,7 @@ def _http_get_json(url: str, timeout: float = 7.0) -> dict:
         return json.loads(r.read().decode("utf-8", errors="replace"))
 
 def _parse_location_ow(loc: str, key: str):
-    """Return (lat, lon, zone) or None."""
+    """Return (lat, lon, zone) or None. Accepts 'lat,lon' or 'City,CC' or 'ZIP,CC'."""
     s = (loc or "").strip()
     if not s:
         return None
@@ -423,16 +419,15 @@ def _parse_location_ow(loc: str, key: str):
             return la, lo, f"{la:.4f},{lo:.4f}"
         except ValueError:
             pass
-    # ZIP (requires country with OWM zip endpoint)
-    if s.replace("-", "").replace(" ", "").isdigit() or ("," in s and s.split(",")[0].strip().isdigit()):
-        if "," in s:
-            q = urllib.parse.quote(s)
-            try:
-                j = _http_get_json(f"https://api.openweathermap.org/geo/1.0/zip?zip={q}&appid={key}")
-                return float(j["lat"]), float(j["lon"]), f'{j.get("name","ZIP")}'
-            except Exception:
-                pass
-    # City,Country
+    # ZIP,CC (opcjonalnie)
+    if "," in s and s.split(",")[0].strip().replace("-", "").isdigit():
+        q = urllib.parse.quote(s)
+        try:
+            j = _http_get_json(f"https://api.openweathermap.org/geo/1.0/zip?zip={q}&appid={key}")
+            return float(j["lat"]), float(j["lon"]), f'{j.get("name","ZIP")}'
+        except Exception:
+            pass
+    # City,Country (fallback)
     q = urllib.parse.quote(s)
     j = _http_get_json(f"https://api.openweathermap.org/geo/1.0/direct?q={q}&limit=1&appid={key}")
     if isinstance(j, list) and j:
@@ -484,22 +479,58 @@ def _map_openweather_id_to_weatherN(ow_id: int, icon: str) -> int:
         return 31
     return 99
 
-def _fetch_openweather(lat: float, lon: float, key: str) -> dict:
+def _owm_current(lat: float, lon: float, key: str) -> dict:
     qs = urllib.parse.urlencode({
         "lat": f"{lat:.6f}",
         "lon": f"{lon:.6f}",
         "units": OW_UNITS,
         "lang": OW_LANG,
-        "exclude": "minutely,hourly,alerts",
         "appid": key,
     })
-    return _http_get_json(f"https://api.openweathermap.org/data/3.0/onecall?{qs}")
+    return _http_get_json(f"https://api.openweathermap.org/data/2.5/weather?{qs}")
+
+def _owm_forecast(lat: float, lon: float, key: str) -> dict:
+    qs = urllib.parse.urlencode({
+        "lat": f"{lat:.6f}",
+        "lon": f"{lon:.6f}",
+        "units": OW_UNITS,
+        "lang": OW_LANG,
+        "appid": key,
+    })
+    return _http_get_json(f"https://api.openweathermap.org/data/2.5/forecast?{qs}")
+
+def _compute_today_minmax_from_forecast(fore: dict) -> tuple[int,int] | None:
+    try:
+        lst = fore.get("list", [])
+        city = fore.get("city", {})
+        tz_sec = int(city.get("timezone", 0))
+        if not lst:
+            return None
+        # Wyznacz datę "dziś" wg strefy miasta
+        now_utc = int(time.time())
+        local_now = now_utc + tz_sec
+        local_date = datetime.datetime.utcfromtimestamp(local_now).date()
+        mins, maxs = [], []
+        for it in lst:
+            dt_utc = int(it.get("dt", 0))
+            local_dt = datetime.datetime.utcfromtimestamp(dt_utc + tz_sec)
+            if local_dt.date() != local_date:
+                continue
+            main = it.get("main", {})
+            t = float(main.get("temp", 0))
+            mins.append(t); maxs.append(t)
+        if not mins:
+            return None
+        lo = int(round(min(mins))); hi = int(round(max(maxs)))
+        return lo, hi
+    except Exception:
+        return None
 
 def _weather_fetch_now() -> dict | None:
     """Return dict {weatherN, lo, hi, zone, desc} or None on any failure/disabled."""
     key = (OW_API_KEY or "").strip()
     if not key:
-        if not _weather_cache["warned_no_key"]:
+        if not _weather_cache.get("warned_no_key"):
             print("[Weather] No OpenWeather API key set — DATE payload will carry blank weather fields.")
             _weather_cache["warned_no_key"] = True
         return None
@@ -510,18 +541,34 @@ def _weather_fetch_now() -> dict | None:
         if not loc:
             return None
         lat, lon, zone = loc
-        j = _fetch_openweather(lat, lon, key)
-        if not j or "current" not in j or "daily" not in j or not j["daily"]:
-            return None
-        cur = j["current"]; d0 = j["daily"][0]
-        w = cur.get("weather", [{}])[0]
+
+        cur = _owm_current(lat, lon, key)        # FREE
+        fore = None
+        try:
+            fore = _owm_forecast(lat, lon, key)  # FREE
+        except Exception:
+            fore = None
+
+        # Current → id, icon, description
+        w = (cur.get("weather") or [{}])[0]
         owid = int(w.get("id", 0) or 0)
         icon = str(w.get("icon", "") or "")
         desc = str(w.get("description", "") or "")
+
         weatherN = _map_openweather_id_to_weatherN(owid, icon)
-        temps = d0.get("temp", {})
-        lo = int(round(float(temps.get("min", cur.get("temp", 0)))))
-        hi = int(round(float(temps.get("max", cur.get("temp", 0)))))
+
+        lohi = _compute_today_minmax_from_forecast(fore) if fore else None
+        if lohi is None:
+            # fallback: użyj bieżącej temp jako lo/hi
+            tnow = cur.get("main", {}).get("temp")
+            try:
+                tnow = float(tnow)
+                lo = hi = int(round(tnow))
+            except Exception:
+                lo = hi = 0
+        else:
+            lo, hi = lohi
+
         zone_ascii = re.sub(r"[^\x20-\x7E]", "?", zone).replace(";", ",")
         desc_ascii = re.sub(r"[^\x20-\x7E]", "?", desc).replace(";", ",")
         return {"weatherN": weatherN, "lo": lo, "hi": hi, "zone": zone_ascii, "desc": desc_ascii}
@@ -529,12 +576,10 @@ def _weather_fetch_now() -> dict | None:
         return None
 
 def get_weather_cached() -> dict | None:
-    """Return cached weather or refresh if stale. Respects WEATHER_REFRESH_SECONDS."""
     now = time.time()
     if _weather_cache["data"] is not None and (now - _weather_cache["ts"] < WEATHER_REFRESH_SECONDS):
         return _weather_cache["data"]
     data = _weather_fetch_now()
-    # Cache the (possibly None) result to avoid spamming on repeated failures
     _weather_cache["data"] = data
     _weather_cache["ts"] = now
     return data
@@ -586,10 +631,7 @@ def p_date():
 def p_net(fan_prefer: str, fan_max_rpm: int):
     rxk, txk = _nm.rates_ks()                    # sample once per NET tile visit
     rpm = fan_rpm(fan_prefer, fan_max_rpm)
-
-    # cache for dashboard/update_latest
     _last_net["rxk"], _last_net["txk"], _last_net["rpm"] = rxk, txk, rpm
-
     if rxk is None or txk is None:
         return f"{{SPEED:{rpm};NETWORK:N/A,N/A}}"
     return f"{{SPEED:{rpm};NETWORK:{_fmt_rate(rxk)},{_fmt_rate(txk)}}}"
@@ -620,7 +662,8 @@ def seq_for(tile_id: int) -> int:
 
 # -------- Protocol --------
 def read_enq(ser):
-    if ser.read(1)!=b"\xAA": return None
+    b = ser.read(1)
+    if b!=b"\xAA": return None
     if ser.read(1)!=b"\x05": return None
     b3=ser.read(1)
     if not b3: return None
@@ -690,7 +733,7 @@ def render_dashboard(latest):
         age = int(time.time() - _weather_cache['ts'])
         print(f"  Age          : {age}s (refresh {WEATHER_REFRESH_SECONDS}s)")
     else:
-        reason = "no API key" if not OW_API_KEY.strip() else "offline/unavailable"
+        reason = "no API key" if not OW_API_KEY else "offline/unavailable"
         print(colorize(f"Weather        : OFFLINE ({reason})", C.BY))
     print("-"*72)
     sys.stdout.flush()
@@ -722,13 +765,10 @@ def update_latest_from_payload(id_byte, latest, fan_prefer, fan_max_rpm):
         rxk = _last_net.get("rxk")
         txk = _last_net.get("txk")
         rpm = _last_net.get("rpm")
-
-        # Fallback once if cache is empty
         if rxk is None or txk is None or rpm is None:
             rxk, txk = _nm.rates_ks()
             rpm = fan_rpm(fan_prefer, fan_max_rpm)
             _last_net["rxk"], _last_net["txk"], _last_net["rpm"] = rxk, txk, rpm
-
         latest.update({
             "net_rx": rxk,
             "net_tx": txk,
@@ -749,7 +789,6 @@ def update_latest_from_payload(id_byte, latest, fan_prefer, fan_max_rpm):
         except Exception: pass
         latest.update({"battery": pct if pct is not None else 177})
     elif id_byte==DAT:
-        # Nudge the weather cache on DATE tile cycles (will only fetch if stale)
         get_weather_cached()
 
 # -------- Activation + Retry + Main loop --------
@@ -799,13 +838,11 @@ def main():
     args=ap.parse_args()
     NOCOLOR = args.no_color
 
-    # Open serial (with start delay to let drivers/hw settle)
     ser = open_serial(args.start_delay)
     print(f"[AtomMan] on {PORT} @ {BAUD} (RTSCTS={RTSCTS} DSRDTR={DSRDTR}; start_delay={args.start_delay:.1f}s; fan={args.fan_prefer}, fan_max_rpm={args.fan_max_rpm})")
 
     latest = {"cpu_model": cpu_model()}
 
-    # Activation attempts
     activated=False
     for i in range(1, args.attempts+1):
         activated = unlock_attempt(ser, i, latest, args.window, args.fan_prefer, args.fan_max_rpm, args.dashboard)
@@ -822,7 +859,6 @@ def main():
     else:
         print("[OK] Screen activated — switching to steady-state.")
 
-    # Steady state: rotate tiles; use fixed per-tile SEQs
     FULL_ROT = [
         (CPU,p_cpu),(GPU,p_gpu),(MEM,p_mem),(DSK,p_dsk),
         (DAT,p_date),(NET,lambda: p_net(args.fan_prefer, args.fan_max_rpm)),
@@ -848,7 +884,7 @@ def main():
 
         if args.dashboard:
             now=time.time()
-            if now - last_render >= 0.25:  # ~4 fps max
+            if now - last_render >= 0.25:
                 render_dashboard(latest)
                 last_render=now
 

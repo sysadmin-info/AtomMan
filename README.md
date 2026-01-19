@@ -1,289 +1,235 @@
-# `screen.py` – AtomMan Serial Display Daemon
+# AtomMan (Linux) — Secure Boot + NVIDIA (DKMS signing) + AtomMan USB LCD daemon
 
-`screen.py` is a Python daemon that drives the **AtomMan USB serial display panel**, unlocking it after boot and continuously updating all tiles with system metrics (CPU, GPU, memory, disk, date, weather, network, volume, battery, and fan speed).  
+This repository contains two parts:
 
-The script is designed to run as a **systemd service** on Linux, with optional console dashboard output for debugging.
+- `screen.py` — the Python daemon that talks to the AtomMan USB serial LCD panel (runs as a systemd service).
+- `atomman-setup/` — a numbered, reboot-friendly setup flow for Ubuntu with **Secure Boot enabled** (dual-boot safe) and NVIDIA drivers.
 
----
-
-## Features
-
-- **Unlock & Retry Logic** – Robust startup handshake with retries until the panel activates.  
-- **Per-Tile Payloads** – Updates CPU, GPU, memory, disk, date, weather, net, volume, battery.  
-- **Fan Speed**  
-  - Primary: Linux **hwmon** (`/sys/class/hwmon/*/fan*_input`)  
-  - Fallback: NVIDIA (`nvidia-smi --query-gpu=fan.speed`) → converts % to RPM  
-  - Final fallback: `-1` if no source found  
-- **CPU Frequency in kHz** (panel requires kHz, not MHz)  
-- **Date/Time/Week/Weather Tile**  
-  - Week uses `0..6` where `0=Sunday … 6=Saturday`  
-  - Full payload form:  
-    ```
-    {Date:YYYY/MM/DD;Time:HH:MM:SS;Week:N;Weather:X;TemprLo:L,TemprHi:H,Zone:Z,Desc:D}
-    ```
-  - `Weather` is a numeric code (1–40) selecting an icon baked into the panel firmware.  
-  - `Zone` and `Desc` fields exist in the protocol but the panel firmware ignores them (they do not render, even when ASCII text is sent).  
-- **Network Throughput Auto-Scaling**  
-  - Values shown in `K/s`, `M/s`, or `G/s` depending on rate  
-- **Optional Console Dashboard** (`--dashboard`) with ANSI colors  
-- **Configurable Start Delay** (ensures drivers/fans are ready before panel comms start)  
-- **Systemd Ready** – run as a background service with restart policy.  
+The goal is: after an `apt upgrade` (kernel / DKMS rebuild), you can re-run **one script** to re-sign NVIDIA modules and reboot.
 
 ---
 
-## Requirements
+## Repository layout
 
-- Python 3.10+  
-- `pyserial`  
-- Linux with `/proc`, `/sys`, and `nvidia-smi` (optional for NVIDIA GPU metrics)  
+```
+.
+├── README.md
+├── screen.py
+└── atomman-setup/
+    ├── 00_check.sh
+    ├── 10_purge_nvidia.sh
+    ├── 20_install_nvidia.sh
+    ├── 30_secureboot_enroll_key.sh
+    ├── 40_sign_or_reinstall_dkms.sh
+    ├── 50_app_setup.sh
+    ├── 60_env_write_example.sh
+    ├── 70_verify.sh
+    ├── requirements.txt
+    ├── sudoers/atomman-dmidecode
+    └── systemd/atomman.service
+```
 
-Install dependencies:
+---
+
+## Quick start (app only, without touching drivers)
+
+If your NVIDIA driver is already working and Secure Boot signing is already done:
 
 ```bash
-sudo apt update
-sudo apt install python3 python3-pip dmidecode pciutils lshw
-pip install pyserial
+# Clone your fork
+git clone https://github.com/sysadmin-info/AtomMan.git
+cd AtomMan
+
+# Create venv
+python3 -m venv venv
+. venv/bin/activate
+pip install --upgrade pip
+pip install -r atomman-setup/requirements.txt || pip install pyserial
+
+# Run dashboard test in foreground
+python ./screen.py --dashboard
 ```
 
 ---
 
-## Permissions
+## OpenWeather configuration (no secrets in code)
 
-The AtomMan display is exposed as a USB serial device under `/dev/serial/by-id/...`.  
-Grant your user access by adding them to the `dialout` group:
+`screen.py` reads OpenWeather from environment variables.
+Recommended: store them in `/etc/atomman.env` (used by systemd).
+
+Example:
 
 ```bash
-sudo usermod -aG dialout <YOUR_USER>
+sudo tee /etc/atomman.env >/dev/null <<'EOF'
+# Serial device (optional override)
+ATOMMAN_PORT=/dev/serial/by-id/usb-Synwit_USB_Virtual_COM-if00
+ATOMMAN_BAUD=115200
+
+# Weather (OpenWeather)
+ATOMMAN_OWM_API=YOUR_OPENWEATHER_KEY
+ATOMMAN_OWM_LOCATION=51.7687,19.4570
+ATOMMAN_OWM_UNITS=metric
+ATOMMAN_OWM_LANG=pl
+ATOMMAN_WEATHER_REFRESH=600
+
+# Fan reading behavior (optional)
+ATOMMAN_FAN_PREFER=nvidia
+ATOMMAN_FAN_MAX_RPM=2200
+EOF
+
+sudo chmod 600 /etc/atomman.env
 ```
 
-Log out and back in for this to take effect.
+Notes:
+- `ATOMMAN_OWM_LOCATION` can be `lat,lon` (best) or `City,CC`.
+- `ATOMMAN_WEATHER_REFRESH=600` means “refresh every 10 minutes”.
+- Keep the key **only** in `/etc/atomman.env` (or a user `.env` if you run manually).
 
 ---
 
-## Usage
+## systemd service
 
-Run directly:
+A service unit is shipped in:
+
+- `atomman-setup/systemd/atomman.service`
+
+Install it:
 
 ```bash
-python3 screen.py --dashboard
-```
-
-### Command-line Flags
-
-| Flag             | Default   | Description                                                                 |
-|------------------|-----------|-----------------------------------------------------------------------------|
-| `--attempts`     | `3`       | Unlock attempts before falling back into passive mode.                      |
-| `--window`       | `5.0`     | Seconds per unlock attempt window.                                          |
-| `--start-delay`  | `3.0`     | Seconds to sleep before opening serial port (driver warm-up).               |
-| `--dashboard`    | *off*     | Show live dashboard in console.                                             |
-| `--no-color`     | *off*     | Disable ANSI colors in dashboard.                                           |
-| `--fan-prefer`   | `auto`    | `auto` → hwmon → nvidia; or force one (`hwmon` or `nvidia`).                 |
-| `--fan-max-rpm`  | `5000`    | Used when NVIDIA reports % only; converted into RPM.                        |
-
----
-
-## Weather Support
-
-### Original Windows App
-- The official Windows control software used a **private weather API** provided by the panel vendor.  
-- The API requires a vendor-specific key; when tested outside the Windows app, it returns:  
-  ```
-  {"status":"You do not have access to this API.","status_code":"AP010002"}
-  ```
-- Because of this restriction, the Windows weather feed cannot be reused directly.
-
-### OpenWeather Integration
-- `screen.py` now supports **OpenWeather** as the weather source.  
-- You must provide an OpenWeather API key (free accounts available).  
-- Location can be specified as a city name or ZIP code.  
-- The script queries OpenWeather every 10 minutes (default, adjustable).  
-- On success, the following fields are extracted:
-  - **Weather code → panel icon number (1–40)**  
-  - **Daily low/high temperature**  
-  - **Condition description** (used in dashboard only)  
-  - **Zone (city, country)** (used in dashboard only)  
-
-### Panel Behavior
-- **Weather**: numeric code shows the corresponding icon (1=first icon, 40=last).  
-- **TemprLo / TemprHi**: numeric values are displayed.  
-- **Zone / Desc**: accepted in payload but never displayed on screen. They are “dead fields.”  
-
-### Example Payloads
-With weather data:
-```
-{Date:2025/09/15;Time:22:14:03;Week:1;Weather:4;TemprLo:12,TemprHi:27,Zone:Denver,US,Desc:broken clouds}
-```
-
-Without weather (no internet or no API key):
-```
-{Date:2025/09/15;Time:22:14:03;Week:1;Weather:;TemprLo:,TemprHi:,Zone:,Desc:}
-```
-
-### Dashboard Example
-Dashboard shows all weather details (even Zone and Desc for clarity), but the panel itself only uses icon and temps:
-
-```
-Weather        : ONLINE
-Code           : 1 (mapped)
-Lo/Hi          : 12/28 °C
-Zone           : Denver, Colorado, US
-Desc           : clear sky
-Age            : 4s (refresh 600s)
-```
-
----
-
-## OpenWeather → Panel Icon Mapping
-
-| OpenWeather condition | Example values                | Panel code |
-|------------------------|--------------------------------|------------|
-| Clear sky              | `clear sky`                   | 1          |
-| Few clouds             | `few clouds`                  | 2          |
-| Scattered clouds       | `scattered clouds`            | 3          |
-| Broken clouds          | `broken clouds`               | 4          |
-| Overcast clouds        | `overcast clouds`             | 5          |
-| Light rain             | `light rain`                  | 6          |
-| Moderate rain          | `moderate rain`               | 7          |
-| Heavy rain             | `heavy intensity rain`        | 8          |
-| Thunderstorm           | `thunderstorm`, `thunder`     | 9          |
-| Light snow             | `light snow`                  | 10         |
-| Snow                   | `snow`                        | 11         |
-| Heavy snow             | `heavy snow`                  | 12         |
-| Sleet                  | `sleet`                       | 13         |
-| Mist / Fog / Haze      | `mist`, `fog`, `haze`         | 14         |
-| Smoke / Dust / Sand    | `smoke`, `dust`, `sand`       | 15         |
-| Tornado                | `tornado`                     | 16         |
-| Drizzle                | `light intensity drizzle`     | 17         |
-| Shower rain            | `shower rain`                 | 18         |
-| Freezing rain          | `freezing rain`               | 19         |
-| Extreme (hail, etc.)   | `hail`, `extreme`             | 20         |
-| …                      | (extend mapping as needed)    | 21–40      |
-
-(Only codes 1–40 are valid; unmapped conditions can be assigned arbitrarily within this range.)
-
----
-
-## Example Dashboard
-
-```
-AtomMan — Active   Time: 2025-09-15 13:14:57
-----------------------------------------------------------------
-Processor type : Intel(R) Core(TM) Ultra 9 185H
-Processor temp : 45 °C
-CPU usage      : 7 %
-CPU freq       : 1919081 kHz
-
-GPU model      : NVIDIA GeForce RTX 3090
-GPU temp       : 36 °C
-GPU usage      : 6 %
-
-RAM (vendor)   : Kingston
-RAM used       : 6.2 GB
-RAM avail      : 56.4 GB
-RAM total      : 62.6 GB
-RAM usage      : 10 %
-
-Disk (label)   : ESO0001TTLCW-EP3-2L
-Disk used      : 152 GB
-Disk total     : 436 GB
-Disk usage     : 35 %
-
-Net iface      : wlp89s0f0
-Net RX,TX      : 1.2 K/s, 3.0 K/s
-Fan speed      : 1500 r/min
-Volume         : 44 %
-Battery        : 177 %
-
-Weather        : ONLINE
-Code           : 1 (mapped)
-Lo/Hi          : 12/28 °C
-Zone           : Denver, Colorado, US
-Desc           : clear sky
-Age            : 4s (refresh 600s)
-----------------------------------------------------------------
-```
-
----
-
-## Systemd Service Setup
-
-1. Copy `screen.py` into `/home/<YOUR_USER>/screen/screen.py`.  
-
-2. Create a service file:
-
-```ini
-# /etc/systemd/system/atomman.service
-[Unit]
-Description=AtomMan Screen Daemon
-After=network.target
-
-[Service]
-ExecStart=/usr/bin/python3 /home/<YOUR_USER>/screen/screen.py --start-delay 5
-WorkingDirectory=/home/<YOUR_USER>/screen
-Restart=always
-User=<YOUR_USER>
-Group=dialout
-
-[Install]
-WantedBy=multi-user.target
-```
-
-3. Reload systemd and enable the service:
-
-```bash
+sudo install -m 0644 atomman-setup/systemd/atomman.service /etc/systemd/system/atomman.service
 sudo systemctl daemon-reload
-sudo systemctl enable atomman
-sudo systemctl start atomman
+sudo systemctl enable --now atomman
+sudo systemctl status atomman --no-pager -l
 ```
 
-4. Check logs:
+Logs:
 
 ```bash
-journalctl -u atomman -f
+sudo tail -n 200 /var/log/atomman.log
+# or
+sudo journalctl -u atomman -b --no-pager -n 200
 ```
 
 ---
 
-## Internals
+## Secure Boot + NVIDIA (the numbered scripts)
 
-### Protocol
+These scripts are designed so you can run them step-by-step, with clean reboot boundaries.
 
-- **ENQ (device → host):**  
-  ```
-  AA 05 <SEQ_ASCII> CC 33 C3 3C
-  ```
+### 00_check.sh
+Sanity checks (kernel, Secure Boot, GPU visibility, prerequisites).
 
-- **REPLY (host → device):**  
-  ```
-  AA <TileID> 00 <SEQ_ASCII> {ASCII payload} CC 33 C3 3C
-  ```
+```bash
+cd atomman-setup
+./00_check.sh
+```
 
-### Tiles
+### 10_purge_nvidia.sh
+Remove old NVIDIA packages (clean baseline).
 
-| Tile | ID  | Seq | Payload Example                                                                 |
-|------|-----|-----|---------------------------------------------------------------------------------|
-| CPU  | 0x53| '2' | `{CPU:AMD Ryzen 9;Tempr:62;Useage:27;Freq:3900000;Tempr1:62;}`                   |
-| GPU  | 0x36| '3' | `{GPU:NVIDIA RTX 4060;Tempr:70;Useage:43}`                                      |
-| MEM  | 0x49| '4' | `{Memory:Samsung;Used:9.5;Available:22.3;Total:31.8;Useage:29}`                  |
-| DISK | 0x4F| '5' | `{DiskName:Samsung SSD 980 PRO;Tempr:33;UsageSpace:222;AllSpace:931;Usage:24}`  |
-| DATE | 0x6B| '6' | `{Date:2025/09/15;Time:14:22:10;Week:1;Weather:;TemprLo:,TemprHi:,Zone:,Desc:}` |
-| NET  | 0x27| '7' | `{SPEED:1570;NETWORK:2.4M/s,312K/s}`                                            |
-| VOL  | 0x10| '9' | `{VOLUME:45}`                                                                   |
-| BAT  | 0x1A| '2' | `{Battery:97}`                                                                  |
+```bash
+sudo ./10_purge_nvidia.sh
+```
+
+### 20_install_nvidia.sh
+Install NVIDIA driver (Ubuntu repo) and prerequisites.
+
+```bash
+sudo ./20_install_nvidia.sh
+sudo reboot
+```
+
+After reboot:
+
+```bash
+nvidia-smi
+```
+
+If Secure Boot blocks modules, you will typically see:
+
+```bash
+dmesg | grep -i rejected | tail -n 50
+```
+
+### 30_secureboot_enroll_key.sh  (MOK key enrollment, includes DER conversion)
+Creates a Machine Owner Key (MOK) and imports it into firmware (MOK Manager).
+
+```bash
+sudo ./30_secureboot_enroll_key.sh
+sudo reboot
+```
+
+During reboot you must enroll the key in the blue MOK Manager screen:
+Enroll MOK → Continue → Yes → enter password → reboot.
+
+### 40_sign_or_reinstall_dkms.sh  (re-sign NVIDIA DKMS modules)
+This is the “recovery” script you typically re-run after `apt upgrade` (new kernel / DKMS rebuild).
+
+```bash
+sudo ./40_sign_or_reinstall_dkms.sh
+sudo reboot
+```
+
+After reboot:
+
+```bash
+nvidia-smi
+```
+
+### 50_app_setup.sh
+Creates the venv, installs deps, installs systemd unit, prepares permissions.
+
+```bash
+sudo ./50_app_setup.sh
+```
+
+### 60_env_write_example.sh
+Writes an example environment file (you should edit and put your real key).
+
+```bash
+sudo ./60_env_write_example.sh
+```
+
+### 70_verify.sh
+Quick verification checklist.
+
+```bash
+./70_verify.sh
+```
 
 ---
 
-## Troubleshooting
+## Typical “after updates” recovery
 
-- **Fan shows `-1`** → Increase `--start-delay` so NVIDIA/hwmon drivers initialize.  
-- **No serial access** → Add your user to `dialout` (`sudo usermod -aG dialout <YOUR_USER>`).  
-- **Panel does not unlock** → Increase `--window` or `--attempts`.  
-- **Network RX/TX stuck** → Ensure interface is up (`ip link show`).  
-- **Weather blank** → Missing API key or internet access.  
-- **Zone/Desc not showing** → Expected, panel ignores them.  
+If NVIDIA breaks after an `apt upgrade` and you see the module rejection message:
+
+```bash
+cd atomman-setup
+sudo ./40_sign_or_reinstall_dkms.sh
+```
+
+The script will reboot the operating system automatically.
+
+That is usually enough.
+
+---
+
+## Keeping your fork in sync with upstream (optional)
+
+Upstream (original base): `RamSet/AtomMan` (if you still want to track it).
+
+One approach:
+
+```bash
+git remote add upstream https://github.com/RamSet/AtomMan.git
+git fetch upstream
+git merge upstream/main   # or upstream/master depending on upstream
+```
+
+If upstream’s `screen.py` diverges from yours, keep yours and resolve conflicts in favor of your changes.
 
 ---
 
 ## License
 
-MIT License — use freely for personal or commercial projects.
+Follow the license of the upstream project you forked from.
