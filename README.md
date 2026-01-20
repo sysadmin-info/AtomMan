@@ -149,7 +149,7 @@ nvidia-smi
 If Secure Boot blocks modules, you will typically see:
 
 ```bash
-dmesg | grep -i rejected | tail -n 50
+sudo dmesg | grep -i rejected | tail -n 50
 ```
 
 ### 30_secureboot_enroll_key.sh  (MOK key enrollment, includes DER conversion)
