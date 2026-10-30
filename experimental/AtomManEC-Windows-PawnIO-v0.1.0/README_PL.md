@@ -1,6 +1,6 @@
 # AtomMan X7 Ti / Windows / PawnIO — eksperyment v0.1
 
-Stan: **źródła przygotowane, NIE skompilowane ani nieprzetestowane na prawdziwym EC Windows**. Nie zawiera oficjalnie podpisanego `AtomManEC.bin`. Nie zastępuje jeszcze działającego `AIDA64 -> rejestr -> LCD`.
+Stan: **źródła przygotowane, skompilowane lokalnie (Pawn 4.1.7152, testy 4/4 OK), ale nieprzetestowane na prawdziwym EC Windows**. Nie zawiera oficjalnie podpisanego `AtomManEC.bin`. Nie zastępuje jeszcze działającego `AIDA64 -> rejestr -> LCD`.
 
 ## Zawartość
 
