@@ -31,3 +31,8 @@ modules.order
 
 # ACPI dumps
 atomman-acpi/
+
+# Windows-specific local files
+screen_windows.local.json
+LibreHardwareMonitorLib.dll
+logs/
