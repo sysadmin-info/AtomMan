@@ -1,0 +1,32 @@
+
+name: Windows smoke tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+
+      - name: Smoke test v8
+        run: python -B tests/windows/smoke_v8.py
+
+      - name: Smoke test v9
+        run: python -B tests/windows/smoke_v9.py
