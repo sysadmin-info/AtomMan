@@ -556,7 +556,23 @@ def apply_patch(mod):
         raise RuntimeError('disk_number must be between 0 and 255')
     nvme = WindowsNvmeTemp(disk_number)
     mod['disk_temp_c'] = nvme.read
-    mod['fan_rpm'] = (lambda *_args: -1) if direct is not None else sensors.fan_rpm  # no HTTP if direct DLL
+    
+    def windows_fan_rpm(*args):
+        try:
+            from atomman_aida64_fan import fan_rpm as aida64_fan_rpm
+            rpm = aida64_fan_rpm(*args)
+
+            if rpm >= 0:
+                return rpm
+
+        except (ImportError, OSError, ValueError):
+            pass
+
+        # Preserve existing fallback behavior.
+        return sensors.fan_rpm(*args) if direct is None else -1
+
+    mod['fan_rpm'] = windows_fan_rpm
+
     mod['_nm'] = net
     mod['_read_volume'] = windows_volume
     def windows_battery():
@@ -660,7 +676,7 @@ def apply_patch(mod):
             print('[Windows adapter] CPU DLL note:', st['error'])
     else:
         print('[Windows adapter] CPU temp (LHM HTTP fallback):', sensors.cpu_temp(), 'C (0 = unavailable)')
-    print('[Windows adapter] Fan RPM:', -1 if direct is not None else sensors.fan_rpm(), '(-1 = unavailable)')
+    print('[Windows adapter] Fan RPM:', mod['fan_rpm']('auto', 2000), '(-1 = unavailable)')
     print(f'[Windows adapter] SSD PhysicalDrive{disk_number} temperature: '
           + (f'{temp} C (NVMe sensor 0)' if temp else f'unavailable ({nvme.last_error})'))
     print('[Windows adapter] No WinRing0 / SCCS driver used.')
