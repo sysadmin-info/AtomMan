@@ -36,3 +36,6 @@ atomman-acpi/
 screen_windows.local.json
 LibreHardwareMonitorLib.dll
 logs/
+/experimental/PawnIO.Modules/
+/experimental/AtomManEC-Windows-PawnIO-v0.1.0/*.amx
+/experimental/AtomManEC-Windows-PawnIO-v0.1.0/*.bin
