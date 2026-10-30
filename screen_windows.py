@@ -556,7 +556,7 @@ def apply_patch(mod):
         raise RuntimeError('disk_number must be between 0 and 255')
     nvme = WindowsNvmeTemp(disk_number)
     mod['disk_temp_c'] = nvme.read
-    
+
     def windows_fan_rpm(*args):
         try:
             from atomman_aida64_fan import fan_rpm as aida64_fan_rpm

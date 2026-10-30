@@ -73,3 +73,19 @@ Tryb `--touch-volume --touch-sccs-dtr` aktywuje ustawianie głośności Windows 
 - Brak odczytu oznaczany przez `0` albo `-1` nie jest prawdziwą temperaturą/obrotami; zależy od pola protokołu.
 - Nie publikuj `screen_windows.local.json`, logów COM ani rejestrowych eksportów sensorów bez przejrzenia zawartości.
 - Historyczne opisy implementacji v3–v9 przechowuj osobno w `docs/windows/history/`, bez mieszania ich z aktualną instrukcją.
+
+## Narzedzia diagnostyczne i testy offline
+
+Testy uruchamiaj z katalogu glownego AtomMan:
+
+py -B .\tests\windows\smoke_v8.py
+py -B .\tests\windows\smoke_v9.py
+
+Diagnostyka:
+
+py -B .\tools\windows\atomman_serial_capture.py --help
+py -B .\tools\windows\atomman_volume_trace.py --help
+
+Testy smoke nie otwieraja fizycznego COM3.
+Aktywne narzedzia diagnostyczne moga korzystac z COM3.
+Logi zapisywane sa w katalogu logs/.
