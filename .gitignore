@@ -3,10 +3,31 @@
 *.env
 /etc/atomman.env
 
-# Python
-__pycache__/
-venv/
-.venv/
-
 # Logs
 *.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Linux kernel / DKMS
+*.ko
+*.ko.*
+*.o
+*.mod
+*.mod.c
+*.cmd
+Module.symvers
+modules.order
+.tmp_versions/
+
+# Secure Boot keys
+*.priv
+*.der
+*.pem
+
+# ACPI dumps
+atomman-acpi/
