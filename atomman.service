@@ -1,0 +1,41 @@
+[Unit]
+Description=AtomMan LCD Screen Daemon (Linux + Touch Audio)
+After=network-online.target
+
+[Service]
+Type=simple
+
+# User and permissions
+User=user
+Group=dialout
+WorkingDirectory=/home/user/atomman
+
+# Environment
+EnvironmentFile=/etc/atomman.env
+Environment=ATOMMAN_NVIDIA_SMI=/usr/bin/nvidia-smi
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin
+
+# PipeWire / WirePlumber user session
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+
+# Synwit USB Virtual COM
+Environment=ATOMMAN_DSRDTR=false
+Environment=ATOMMAN_RTSCTS=false
+
+# Wait for serial device
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do ls -1 /dev/serial/by-id/*Synwit* >/dev/null 2>&1 && exit 0; sleep 1; done; echo "Synwit serial device not found under /dev/serial/by-id" >&2; exit 1'
+
+# Start AtomMan with bidirectional audio support
+ExecStart=/home/user/atomman/venv/bin/python /home/user/atomman/src/screen_linux_audio.py --touch-volume --start-delay 8 --fan-prefer nvidia --fan-max-rpm 2200
+
+# Restart policy
+Restart=on-failure
+RestartSec=5
+
+# Logging
+StandardOutput=append:/var/log/atomman.log
+StandardError=append:/var/log/atomman.log
+
+[Install]
+WantedBy=multi-user.target
