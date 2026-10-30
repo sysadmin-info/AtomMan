@@ -834,7 +834,7 @@ def main():
     ap.add_argument("--fan-prefer", choices=["auto","hwmon","nvidia"], default=ENV_FAN_PREFER,
                     help="Preferred fan source (auto tries hwmon then NVIDIA)")
     ap.add_argument("--fan-max-rpm", type=int, default=ENV_FAN_MAX_RPM,
-                    help="Used only when NVIDIA reports percent; RPM = % * this / 100")
+                    help="Used only when NVIDIA reports percent; RPM = %% * this / 100")
     args=ap.parse_args()
     NOCOLOR = args.no_color
 
